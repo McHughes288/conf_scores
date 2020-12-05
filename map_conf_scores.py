@@ -5,12 +5,15 @@ flags.DEFINE_string("dev_set", None, "path to development SGML file used to cali
 flags.DEFINE_string("test_set", None, "path to held-out test set to apply calibration to")
 
 flags.mark_flag_as_required("dev_set")
-# flags.mark_flag_as_required("test_set")
+flags.mark_flag_as_required("test_set")
 
 FLAGS = flags.FLAGS
 
 
 def main(unused_argv):
+
+    test_data = parse_ctm_file(FLAGS.test_set)
+    print(test_data[0:20])
 
     data = parse_sgml_file(FLAGS.dev_set)
     relevant_data = []

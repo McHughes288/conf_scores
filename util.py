@@ -1,9 +1,9 @@
 from bs4 import BeautifulSoup
 
 
-def parse_sgml_file(file):
-    with open(file, "r") as sgml_f:
-        data = BeautifulSoup(sgml_f.read())
+def parse_sgml_file(file_path):
+    with open(file_path, "r") as sgml_f:
+        data = BeautifulSoup(sgml_f.read(), "html.parser")
     return data
 
 
@@ -30,5 +30,22 @@ def parse_word_string(text):
     return word_data
 
 
-def parse_ctm_file(file):
-    pass
+def parse_ctm_file(file_path):
+    with open(file_path, "r") as ctm_f:
+        lines = ctm_f.readlines()
+        data = []
+        for line in lines:
+            try:
+                file_name, _, start, end, word, conf = line.split()
+            except ValueError:
+                continue
+            data.append(
+                {
+                    "file": file_name,
+                    "start": start,
+                    "end": end,
+                    "word": word,
+                    "conf": conf,
+                }
+            )
+    return data
