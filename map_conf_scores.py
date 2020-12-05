@@ -1,12 +1,23 @@
-from util import parse_sgml_file, parse_ctm_file, parse_word_string
-from absl import logging, flags, app
+"""Map confidence scores
+
+Training script to learn a piece-wise linear mapping that maximises confidence of 
+correctly predicted words and minimises confidence of incorrectly predicted words
+on a development dataset.
+The mapping is then applied to the confidence scores on a held-out dataset.
+
+Example:
+    $ python3 -m map_conf_scores --dev_set ~/dev.ctm.sgml --test_set ~/eval.ctm --steps 2000 --lr 0.01
+"""
+
 import numpy as np
 from math import isnan
+from absl import flags, app
+from util import parse_sgml_file, parse_ctm_file, parse_word_string
 
 flags.DEFINE_string("dev_set", None, "path to development SGML file used to calibrate conf scores")
 flags.DEFINE_string("test_set", None, "path to held-out test set to apply calibration to")
-flags.DEFINE_float("lr", 0.1, "path to development SGML file used to calibrate conf scores")
-flags.DEFINE_integer("steps", 1000, "path to held-out test set to apply calibration to")
+flags.DEFINE_float("lr", 0.1, "learning rate for gradient ascent")
+flags.DEFINE_integer("steps", 1000, "number of steps to run the training loop for")
 
 flags.mark_flag_as_required("dev_set")
 flags.mark_flag_as_required("test_set")
@@ -15,10 +26,23 @@ FLAGS = flags.FLAGS
 
 
 def piecewise_linear_mapping(x, params):
+    """Applies a three stage piecewise linear mapping
+
+    Args:
+        x (np.array): array of input values
+        params (np.array): array containing four model parameters (m1, m2, m3 and c2)
+            These correspond to the slope gradients of each line and the intercept of the second
+
+    Returns:
+        y (np.array): array of mapped values
+
+    """
+    # unpack params
     m1, m2, m3, c2 = params
+    # calculate bounds
     a1 = c2 / (m1 - m2)
     a2 = (1 - m3 - c2) / (m2 - m3)
-
+    # equations of three lines
     f1 = lambda x: m1 * x
     f2 = lambda x: m2 * x + c2
     f3 = lambda x: m3 * (x - 1) + 1
@@ -32,6 +56,18 @@ def piecewise_linear_mapping(x, params):
 
 
 def get_loss(confs, labels, params, epsilon=1e-3):
+    """Apply the mapping to the confidence scores and calculate the mean log likelihood
+
+    Args:
+        confs (np.array): array of confidence scores assumed to be between 0 and 1
+        labels (np.array): array of labels assumed to be 0 or 1
+        params (np.array): array containing four model parameters (m1, m2, m3 and c2)
+        epsilon (float, optional): tiny number to stop log values being undefined
+
+    Returns:
+        loss (float): mean of the log likelihood values for each item in the development set
+
+    """
     mapped_confs = piecewise_linear_mapping(confs, params)
     loss = labels * np.log(mapped_confs + epsilon) + (1 - labels) * np.log(
         1 - mapped_confs + epsilon
@@ -40,6 +76,14 @@ def get_loss(confs, labels, params, epsilon=1e-3):
 
 
 def get_gradients(confs, labels, params):
+    """Calculate the derivative of the loss with respect to each of the model parameters
+
+    Args: identical descriptions to function get_loss
+
+    Returns:
+        np.array containing the gradients for m1, m2, m3 and c2
+
+    """
     m1, m2, m3, c2 = params
     a1 = c2 / (m1 - m2)
     a2 = (1 - m3 - c2) / (m2 - m3)
@@ -71,11 +115,23 @@ def get_gradients(confs, labels, params):
 
 
 def extract_train_samples(data):
+    """Extract confidence scores and labels from the parsed dev data
+
+    Args:
+        data (list): list of segments containing a dictionary of related data
+            (output of parse_sgml_file)
+
+    Returns:
+        confs (np.array): array of confidence scores
+        labels (np.array): array of labels
+    """
     confs, labels = [], []
     for segment in data:
         for word in segment["data"]:
+            # If word was predicted to be correct
             if word["state"] == "C":
                 label = 1
+            # If word results in a substitution or insertion error
             elif word["state"] in ["S", "I"]:
                 label = 0
             elif word["state"] == "D":
@@ -98,34 +154,29 @@ def main(unused_argv):
     prev_loss = -1000
 
     # training loop with gradient ascent update
-    # result is a mapping that maximises confidence of correctly predicted words
-    # and minimises confidence of incorrectly predicted words
     for step in range(FLAGS.steps):
         loss = get_loss(confs, labels, params)
         grads = get_gradients(confs, labels, params)
+        assert not isnan(loss), "Loss is nan so stopping training"
 
+        # log stats and stop if change in loss drops below the threshold
         delta_loss = loss - prev_loss
         prev_loss = loss
         if step % 20 == 0:
             print(
                 f"step {step}, loss {loss}, delta_loss {delta_loss}, params {params}, grads {grads}"
             )
-
-        if isnan(loss):
-            print("Loss is nan so breaking training loop")
-            break
-
         if np.abs(delta_loss) < 1e-10:
             print(f"Change in loss is {delta_loss} < 1e-10, so breaking training loop")
             break
 
         # gradient ascent
         params = params + FLAGS.lr * grads
-        # ensure gradient of lines are positive
+        # ensure slopes of lines are positive
         m1, m2, m3, c2 = params
-        assert m1 > 0
-        assert m2 > 0
-        assert m3 > 0
+        assert m1 > 0, f"The slope of line 1 is {m1}, it must be positive"
+        assert m2 > 0, f"The slope of line 2 is {m2}, it must be positive"
+        assert m3 > 0, f"The slope of line 3 is {m3}, it must be positive"
 
     print(f"final loss {loss}, final params {params}")
 
