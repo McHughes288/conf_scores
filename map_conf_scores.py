@@ -7,27 +7,28 @@ The mapping is then applied to the confidence scores on a held-out dataset.
 
 Example:
     $ python3 -m map_conf_scores \
-    --dev_set ~/dev.ctm.sgml \
-    --test_set ~/eval.ctm \
-    --out_file ~/eval_with_mapped_conf.ctm \
+    --dev_set ~/data/dev.ctm.sgml \
+    --test_set ~/data/eval.ctm \
+    --out_dir ~/exp \
     --steps 2000 \
     --lr 0.01 2>&1 | tee ~/results.log
 """
 
 import numpy as np
 from math import isnan
+import matplotlib.pyplot as plt
 from absl import flags, app
 from util import parse_sgml_file, parse_ctm_file, parse_word_string
 
 flags.DEFINE_string("dev_set", None, "path to development SGML file used to calibrate conf scores")
 flags.DEFINE_string("test_set", None, "path to held-out test set to apply calibration to")
-flags.DEFINE_string("out_file", None, "path to output file")
+flags.DEFINE_string("out_dir", None, "path to output dir")
 flags.DEFINE_float("lr", 0.01, "learning rate for gradient ascent")
 flags.DEFINE_integer("steps", 2000, "number of steps to run the training loop for")
 
 flags.mark_flag_as_required("dev_set")
 flags.mark_flag_as_required("test_set")
-flags.mark_flag_as_required("out_file")
+flags.mark_flag_as_required("out_dir")
 
 FLAGS = flags.FLAGS
 
@@ -151,6 +152,16 @@ def extract_train_samples(data):
     return np.array(confs), np.array(labels)
 
 
+def plot_mapping(params, step, out_dir):
+    x = np.linspace(0, 1, 1000)
+    y = piecewise_linear_mapping(x, params)
+    plt.plot(x, y)
+    plt.xlabel("Conf score")
+    plt.ylabel("Mapped score")
+    plt.title(f"Step {step}")
+    plt.savefig(f"{FLAGS.out_dir}/mapping_plot_step{step}.png")
+
+
 def main(unused_argv):
     # parse the dev data and extract confidence scores and labels
     dev_data = parse_sgml_file(FLAGS.dev_set)
@@ -185,6 +196,10 @@ def main(unused_argv):
         assert m2 > 0, f"The slope of line 2 is {m2}, it must be positive"
         assert m3 > 0, f"The slope of line 3 is {m3}, it must be positive"
 
+        # save mapping to png
+        if step % 100 == 0:
+            plot_mapping(params, step, FLAGS.out_dir)
+
     print(f"final loss {loss}, final params {params}")
 
     # Parse the test data, extract confidence scores and pass through the learnt linear mapping
@@ -198,7 +213,7 @@ def main(unused_argv):
     print(f"av_conf {av_conf}, av_mapped_conf {av_mapped_conf}")
 
     # write test data and mapped confident score to new ctm file
-    with open(FLAGS.out_file, "w") as out_f:
+    with open(f"{FLAGS.out_dir}/eval_with_mapped_conf.ctm", "w") as out_f:
         for item, mapped_conf in zip(test_data, mapped_confs):
             out_f.write(
                 f"{item['file']} 1 {item['start']} {item['end']} {item['word']} {item['conf']} {mapped_conf:.2f} \n"
