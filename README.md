@@ -1,5 +1,4 @@
 # Mapped Confidence Scores
-## Cambridge Assessment "ML/Speech Processing Task"
 
 ### Main script
 Main script is `map_conf_scores.py`
